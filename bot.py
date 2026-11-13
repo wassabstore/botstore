@@ -686,20 +686,20 @@ import os
 from flask import Flask, request
 from telegram import Update
 
-# إعداد تطبيق Flask لاستقبال الـ Webhook
 flask_app = Flask(__name__)
 
-# ضع رابط موقعك على Render هنا (يجب أن ينتهي بتوكن البوت الخاص بك)
-# استبدل "YOUR_BOT_TOKEN" بالتوكن الفعلي أو المتغير المعرف لديك
-TOKEN = "9157079266:AAHnLCeWZCFsdR5YCRLs9clVghaYzqYDpTE" 
+TOKEN = "9157079266:AAHnLCeWZCFsdR5YCRLs9clVghaYzqYDpTE"
 WEBHOOK_URL = f"https://botstore-54tw.onrender.com/{TOKEN}"
+
+# متغير عام لتخزين كائن البوت
+application = None
 
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_listener():
-    """هذه الدالة تستقبل التحديثات فوراً من تيليجرام وتحولها للبوت"""
+    """دالة استقبال التحديثات من تيليجرام ومعالجتها بأمان"""
     json_data = request.get_json(force=True)
-    update = Update.de_json(json_data, app.bot)
-    app.update_queue.put_nowait(update)
+    update = Update.de_json(json_data, application.bot)
+    application.update_queue.put_nowait(update)
     return "OK", 200
 
 @flask_app.route("/")
@@ -707,22 +707,20 @@ def home():
     return "Wassab Store Bot is running live via Webhook! 🚀", 200
 
 def main():
-    global app
-    # بناء البوت بالطريقة المعتادة
-    app = ApplicationBuilder().token(TOKEN).build()
+    global application
+    # بناء البوت وتخزينه في المتغير العام
+    application = ApplicationBuilder().token(TOKEN).build()
 
-    # إضافة الهاندلرز (الأوامر والأزرار) كما هي لديك
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_admin_messages))
+    # إضافة الهاندلرز الخاصة بك
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_admin_messages))
 
-    # تعيين الـ Webhook تلقائياً مع خوادم تيليجرام
-    app.bot.set_webhook(url=WEBHOOK_URL)
-    
+    # تشغيل الدالة لتعيين الويب هوك
+    application.bot.set_webhook(url=WEBHOOK_URL)
     print("🚀 تم تفعيل نظام الويب هوك بنجاح!")
 
 if __name__ == "__main__":
     main()
-    # تشغيل سيرفر Flask على البورت المخصص من Render
     port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host="0.0.0.0", port=port)
+    flask_app.run(host="0.10.0.0", port=port)
