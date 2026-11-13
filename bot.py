@@ -17,17 +17,13 @@ TOKEN = "9157079266:AAHnLCeWZCFsdR5YCRLs9clVghaYzqYDpTE"
 OWNER_ID = 8233150959  # معرف مالك البوت الأساسي المحمى (Wassab Store)
 ADMIN_ID = OWNER_ID
 
-# إعدادات قناة الاشتراك الإجباري
-CHANNEL_USERNAME = "@wassab_1" 
-LINK_CHANNEL = "https://t.me/wassab_1"
-
 # رابط الويب هوك الخاص بـ Render
 WEBHOOK_URL = f"https://botstore-54tw.onrender.com/{TOKEN}"
 
 # إعداد تطبيق الـ Flask
 flask_app = Flask(__name__)
 
-# متغيرات لحفظ حالة المالك (الإذاعة أو خطوات رفع الملفات)
+# متغيرات لحفظ حالة المالك (الإذاعة، رفع الملفات، أو إضافة قناة اشتراك إجباري)
 ADMIN_STATES = {}
 
 # ==================== إعداد قاعدة البيانات (SQLite) ====================
@@ -35,7 +31,7 @@ def init_db():
     conn = sqlite3.connect("wassab_store.db")
     cursor = conn.cursor()
     
-    # جدول المستخدمين مع إحصائيات التحميلات وحالة الـ VIP والحظر
+    # جدول المستخدمين
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -51,7 +47,7 @@ def init_db():
         )
     """)
     
-    # جدول المنتجات (مع حقل القسم الفرعي للكتب)
+    # جدول المنتجات والأقسام
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +56,15 @@ def init_db():
             file_id TEXT,
             category TEXT,
             sub_category TEXT DEFAULT 'عام'
+        )
+    """)
+
+    # جدول قنوات الاشتراك الإجباري (الديناميكي)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS forced_channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_username TEXT UNIQUE,
+            channel_link TEXT
         )
     """)
     
@@ -113,24 +118,39 @@ def check_vip(user_id):
     conn.close()
     return row[0] == 1 if row else False
 
-# ==================== دالة التحقق من الاشتراك الإجباري ====================
-async def check_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
+# ==================== التحقق الديناميكي من قنوات الاشتراك الإجباري ====================
+async def get_unsubscribed_channels(user_id, context: ContextTypes.DEFAULT_TYPE):
+    """التحقق من جميع القنوات الإجبارية وإرجاع القنوات التي لم يشترك فيها المستخدم بعد"""
     if is_owner(user_id):
-        return True
-    try:
-        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except Exception as e:
-        print(f"خطأ في التحقق من الاشتراك: {e}")
-        return False
+        return []
+
+    conn = sqlite3.connect("wassab_store.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT channel_username, channel_link FROM forced_channels")
+    channels = cursor.fetchall()
+    conn.close()
+
+    unsubscribed = []
+    for ch_username, ch_link in channels:
+        try:
+            member = await context.bot.get_chat_member(chat_id=ch_username, user_id=user_id)
+            if member.status not in ["member", "administrator", "creator"]:
+                unsubscribed.append((ch_username, ch_link))
+        except Exception as e:
+            print(f"خطأ في التحقق من القناة {ch_username}: {e}")
+            # إذا حدث خطأ (مثلاً البوت ليس مشرفاً)، نعتبره غير مشترك لتنبيه المالك أو المستخدم
+            unsubscribed.append((ch_username, ch_link))
+            
+    return unsubscribed
 
 # ==================== واجهات الأزرار الفخمة (Inline) ====================
 
-def subscription_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 اشترك في القناة الآن", url=LINK_CHANNEL)],
-        [InlineKeyboardButton("🔄 تحقق من الاشتراك", callback_data="check_sub")]
-    ])
+def subscription_keyboard(unsubscribed_channels):
+    keyboard = []
+    for ch_username, ch_link in unsubscribed_channels:
+        keyboard.append([InlineKeyboardButton(f"📢 اشترك في القناة: {ch_username}", url=ch_link)])
+    keyboard.append([InlineKeyboardButton("🔄 تحقق من الاشتراك", callback_data="check_sub")])
+    return InlineKeyboardMarkup(keyboard)
 
 def user_menu_keyboard(is_vip=False):
     keyboard = [
@@ -145,7 +165,7 @@ def user_menu_keyboard(is_vip=False):
     ]
     if is_vip:
         keyboard.append([InlineKeyboardButton("🌟 أنت عضو مميز VIP لديك صلاحيات خاصة", callback_data="vip_notice")])
-    keyboard.append([InlineKeyboardButton("📞 التواصل مع الإدارة", url=LINK_CHANNEL)])
+    keyboard.append([InlineKeyboardButton("📞 التواصل مع الإدارة", url="https://t.me/wassab_1")])
     return InlineKeyboardMarkup(keyboard)
 
 def admin_menu_keyboard():
@@ -155,11 +175,12 @@ def admin_menu_keyboard():
             InlineKeyboardButton("📦 إدارة وحذف المنتجات", callback_data="admin_manage_products")
         ],
         [
-            InlineKeyboardButton("👥 إحصائيات وإدارة المستخدمين", callback_data="admin_users"),
+            InlineKeyboardButton("📢 إدارة قنوات الإجباري", callback_data="admin_manage_channels"),
             InlineKeyboardButton("📢 إذاعة عامة للكل", callback_data="admin_broadcast_start")
         ],
         [
-            InlineKeyboardButton("🛒 الانتقال لواجهة المتجر العادية", callback_data="switch_to_user_view")
+            InlineKeyboardButton("👥 إحصائيات وإدارة المستخدمين", callback_data="admin_users"),
+            InlineKeyboardButton("🛒 الانتقال لواجهة المتجر", callback_data="switch_to_user_view")
         ]
     ])
 
@@ -177,19 +198,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🚫 عذراً، لقد تم حظرك من استخدام هذا البوت.")
         return
 
-    is_subscribed = await check_subscription(user.id, context)
-    if not is_subscribed:
+    # فحص الاشتراك في القنوات الإجبارية المُضافة
+    unsub_channels = await get_unsubscribed_channels(user.id, context)
+    if unsub_channels:
         sub_text = (
             f"⚠️ **عذراً يا أخي {user.mention_html()}، لا يمكنك استخدام البوت حالياً.**\n\n"
-            f"🔔 يشترط الاشتراك في قناة المتجر لتفعيل البوت واستخدام خدماته:\n"
-            f"👉 {CHANNEL_USERNAME}\n\n"
-            "قم بالاشتراك بالقناة ثم اضغط على زر **(تحقق من الاشتراك)** بالأسفل 👇"
+            f"🔔 يشترط الاشتراك في قنوات المتجر التالية لتفعيل البوت:\n"
         )
+        for ch_username, _ in unsub_channels:
+            sub_text += f"👉 {ch_username}\n"
+        sub_text += "\nقم بالاشتراك بالقنوات ثم اضغط على زر **(تحقق من الاشتراك)** بالأسفل 👇"
+
         if update.message:
-            await update.message.reply_text(sub_text, reply_markup=subscription_keyboard(), parse_mode="HTML")
+            await update.message.reply_text(sub_text, reply_markup=subscription_keyboard(unsub_channels), parse_mode="HTML")
         elif update.callback_query:
-            await update.callback_query.answer("❌ لم تقم بالاشتراك بعد!", show_alert=True)
-            await update.callback_query.edit_message_text(sub_text, reply_markup=subscription_keyboard(), parse_mode="HTML")
+            await update.callback_query.answer("❌ لم تقم بالاشتراك في جميع القنوات بعد!", show_alert=True)
+            await update.callback_query.edit_message_text(sub_text, reply_markup=subscription_keyboard(unsub_channels), parse_mode="HTML")
         return
 
     is_new = add_user(user.id, user.full_name, user.username or "لا يوجد")
@@ -230,7 +254,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode="HTML")
 
 async def admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر سريع للوصول للوحة التحكم عبر /admin"""
     user = update.effective_user
     if not is_owner(user.id):
         await update.message.reply_text("⛔ عذراً، هذا الأمر مخصص لمالك المتجر فقط!")
@@ -242,7 +265,6 @@ async def admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def ban_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر لحظر المستخدمين مع حماية تامة لمالك البوت"""
     user = update.effective_user
     if not is_owner(user.id):
         await update.message.reply_text("⛔ هذا الأمر للمشرفين فقط.")
@@ -254,7 +276,6 @@ async def ban_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ يرجى تحديد معرف المستخدم (ID) المراد حظره بشكل صحيح.\nمثال: `/ban 123456789`", parse_mode="Markdown")
         return
 
-    # 🛡️ حماية مالك البوت من الحظر
     if is_owner(target_user_id):
         await update.message.reply_text("❌ تنبيه أمني: لا يمكنك حظر مالك البوت الأساسي (Wassab Store) أبداً!")
         return
@@ -279,11 +300,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "check_sub":
-        if await check_subscription(user_id, context):
-            await query.answer("✅ شكراً لك! تم تفعيل البوت بنجاح.", show_alert=True)
+        unsub = await get_unsubscribed_channels(user_id, context)
+        if not unsub:
+            await query.answer("✅ شكراً لك! تم التحقق من اشتراكك بنجاح.", show_alert=True)
             await start(update, context)
         else:
-            await query.answer("❌ عذراً، لم تقم بالاشتراك في القناة بعد!", show_alert=True)
+            await query.answer("❌ عذراً، لم تقم بالاشتراك في جميع القنوات بعد!", show_alert=True)
         return
 
     if data == "vip_notice":
@@ -319,6 +341,82 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # إدارة قنوات الاشتراك الإجباري من لوحة التحكم
+    elif data == "admin_manage_channels":
+        if not admin_status: return
+        await query.answer()
+        
+        conn = sqlite3.connect("wassab_store.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, channel_username, channel_link FROM forced_channels")
+        channels = cursor.fetchall()
+        conn.close()
+
+        keyboard = []
+        for ch_id, ch_uname, ch_link in channels:
+            keyboard.append([
+                InlineKeyboardButton(f"📢 {ch_uname}", url=ch_link),
+                InlineKeyboardButton("🗑️ حذف", callback_data=f"del_ch_{ch_id}")
+            ])
+        
+        keyboard.append([InlineKeyboardButton("➕ إضافة قناة جديدة", callback_data="admin_add_channel")])
+        keyboard.append([InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")])
+
+        await query.edit_message_text(
+            "📢 **إدارة قنوات الاشتراك الإجباري:**\n\n"
+            "هنا يمكنك استعراض القنوات المضافة حالياً أو حذفها أو إضافة قناة جديدة:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return
+
+    elif data == "admin_add_channel":
+        if not admin_status: return
+        await query.answer()
+        ADMIN_STATES[user_id] = {"step": "waiting_channel_username"}
+        
+        await query.edit_message_text(
+            "➕ **إضافة قناة اشتراك إجباري جديدة:**\n\n"
+            "الخطوة 1: أرسل معرف القناة (يوزر القناة مسبوقاً بـ @، مثلاً: `@wassab_1`):\n\n"
+            "⚠️ للإلغاء أرسل `/cancel`",
+            reply_markup=back_to_home_keyboard(admin_status)
+        )
+        return
+
+    elif data.startswith("del_ch_"):
+        if not admin_status: return
+        ch_id = data.split("_")[2]
+        
+        conn = sqlite3.connect("wassab_store.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM forced_channels WHERE id = ?", (ch_id,))
+        conn.commit()
+        conn.close()
+        
+        await query.answer("✅ تم حذف القناة بنجاح!", show_alert=True)
+        
+        # إعادة توجيه لوحة القنوات
+        conn = sqlite3.connect("wassab_store.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, channel_username, channel_link FROM forced_channels")
+        channels = cursor.fetchall()
+        conn.close()
+
+        keyboard = []
+        for cid, ch_uname, ch_link in channels:
+            keyboard.append([
+                InlineKeyboardButton(f"📢 {ch_uname}", url=ch_link),
+                InlineKeyboardButton("🗑️ حذف", callback_data=f"del_ch_{cid}")
+            ])
+        keyboard.append([InlineKeyboardButton("➕ إضافة قناة جديدة", callback_data="admin_add_channel")])
+        keyboard.append([InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")])
+
+        await query.edit_message_text(
+            "📢 **إدارة قنوات الاشتراك الإجباري:**\n\nتم الحذف بنجاح. القنوات الحالية:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
     elif data == "admin_broadcast_start":
         if not admin_status: return
         await query.answer()
@@ -344,7 +442,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ])
         await query.edit_message_text(
-            "📤 **خطوة 1: اختيار القسم**\n\n"
+            "📤 **خطوة 1: اختيار القسم الرئيسي**\n\n"
             "اختر ما إذا كان المحتوى عادياً أم مدفوعاً:",
             reply_markup=cat_keyboard
         )
@@ -376,84 +474,71 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, _, chosen_type = data.split("_")
         if user_id in ADMIN_STATES and "category" in ADMIN_STATES[user_id]:
             ADMIN_STATES[user_id]["file_type"] = chosen_type
+            ADMIN_STATES[user_id]["step"] = "waiting_subcat"
             
-            if chosen_type == "book":
-                ADMIN_STATES[user_id]["step"] = "waiting_subcat"
-                await query.answer()
-                await query.edit_message_text(
-                    "📚 **خطوة 3: قسم الكتب الفرعي**\n\n"
-                    "اكتب اسم القسم الخاص بهذا الكتاب (مثلاً: `برمجة`, `روايات`) وأرسله في رسالة نصية.",
-                    reply_markup=back_to_home_keyboard(admin_status),
-                    parse_mode="Markdown"
-                )
-            else:
-                ADMIN_STATES[user_id]["sub_category"] = "عام"
-                ADMIN_STATES[user_id]["step"] = "waiting_file"
-                await query.answer()
-                await query.edit_message_text(
-                    "📥 **خطوة 3: إرسال الملف**\n\n"
-                    "أرسل الآن الملف المطلوب في الشات مباشرة.\n\n"
-                    "⚠️ للإلغاء أرسل `/cancel`",
-                    reply_markup=back_to_home_keyboard(admin_status),
-                    parse_mode="Markdown"
-                )
+            await query.answer()
+            await query.edit_message_text(
+                "📂 **خطوة 3: تحديد القسم الفرعي / التخصص**\n\n"
+                "اكتب اسم القسم الفرعي (مثلاً: `برمجة`, `شبكات`, `قواعد البيانات`, `تصميم`) أو اكتب `عام`:",
+                reply_markup=back_to_home_keyboard(admin_status),
+                parse_mode="Markdown"
+            )
         return
 
-    elif data == "cat_books":
+    elif data in ["cat_books", "cat_videos", "cat_photos"]:
+        f_type_map = {
+            "cat_books": ("book", "📚 قسم الكتب والمؤلفات"),
+            "cat_videos": ("video", "🎬 قسم الفيديوهات التعليمية"),
+            "cat_photos": ("photo", "🖼️ قسم الصور والتصاميم")
+        }
+        f_type, title_text = f_type_map[data]
         await query.answer()
+        
         conn = sqlite3.connect("wassab_store.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT sub_category FROM products WHERE file_type = 'book' AND category != 'paid'")
+        cursor.execute("SELECT DISTINCT sub_category FROM products WHERE file_type = ? AND category != 'paid'", (f_type,))
         sub_cats = cursor.fetchall()
         conn.close()
 
         if not sub_cats:
-            await query.edit_message_text("📚 **قسم الكتب والمؤلفات**\n\n⚠️ عذراً، لا توجد كتب مرفوعة حالياً.", reply_markup=back_to_home_keyboard(admin_status))
+            await query.edit_message_text(f"{title_text}\n\n⚠️ عذراً، لا توجد محتويات مرفوعة في هذا القسم حالياً.", reply_markup=back_to_home_keyboard(admin_status))
             return
 
-        keyboard = [[InlineKeyboardButton(f"📁 قسم: {scat}", callback_data=f"book_subcat_{scat}")] for (scat,) in sub_cats]
+        keyboard = [[InlineKeyboardButton(f"📁 قسم: {scat}", callback_data=f"view_sub_{f_type}_{scat}")] for (scat,) in sub_cats]
         keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="home" if not admin_status else "switch_to_user_view")])
 
-        await query.edit_message_text("📚 **قسم الكتب والمؤلفات**\n\n👇 اختر القسم المناسب:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await query.edit_message_text(f"{title_text}\n\n👇 اختر القسم الفرعي المناسب:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         return
 
-    elif data.startswith("book_subcat_"):
-        scat_name = data.replace("book_subcat_", "")
+    elif data.startswith("view_sub_"):
+        parts = data.split("_")
+        f_type = parts[2]
+        scat_name = "_".join(parts[3:])
         await query.answer()
         
         conn = sqlite3.connect("wassab_store.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT id, title FROM products WHERE file_type = 'book' AND sub_category = ? AND category != 'paid'", (scat_name,))
-        books = cursor.fetchall()
+        cursor.execute("SELECT id, title FROM products WHERE file_type = ? AND sub_category = ? AND category != 'paid'", (f_type, scat_name))
+        products = cursor.fetchall()
         conn.close()
 
-        keyboard = [[InlineKeyboardButton(f"📖 {b_title}", callback_data=f"get_item_{b_id}")] for b_id, b_title in books]
-        keyboard.append([InlineKeyboardButton("🔙 رجوع للأقسام", callback_data="cat_books")])
+        keyboard = [[InlineKeyboardButton(f"📥 {p_title}", callback_data=f"get_item_{p_id}")] for p_id, p_title in products]
+        back_cat_target = "cat_books" if f_type == "book" else ("cat_videos" if f_type == "video" else "cat_photos")
+        keyboard.append([InlineKeyboardButton("🔙 رجوع للأقسام", callback_data=back_cat_target)])
 
-        await query.edit_message_text(f"📁 **قسم: {scat_name}**\n\n👇 اختر الكتاب الذي ترغب بتحميله:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await query.edit_message_text(f"📁 **قسم: {scat_name}**\n\n👇 اختر المحتوى الذي ترغب بتحميله:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         return
 
-    elif data.startswith("cat_"):
-        cat_map = {
-            "cat_videos": ("🎬 قسم الفيديوهات التعليمية", "video"),
-            "cat_photos": ("🖼️ قسم الصور والتصاميم", "photo"),
-            "cat_paid": ("💎 القسم المدفوع المميز (VIP)", "paid")
-        }
-        title, f_type = cat_map[data]
+    elif data == "cat_paid":
         await query.answer()
-        
         conn = sqlite3.connect("wassab_store.db")
         cursor = conn.cursor()
-        if f_type == "paid":
-            cursor.execute("SELECT id, title, file_type FROM products WHERE category = 'paid'")
-        else:
-            cursor.execute("SELECT id, title, file_type FROM products WHERE file_type = ? AND category != 'paid'", (f_type,))
-        
+        cursor.execute("SELECT id, title, file_type FROM products WHERE category = 'paid'")
         products = cursor.fetchall()
         conn.close()
 
         if not products:
-            text = f"📂 **{title}**\n\n⚠️ عذراً، لا توجد محتويات مرفوعة في هذا القسم حالياً."
+            text = "💎 **القسم المدفوع المميز (VIP)**\n\n⚠️ عذراً، لا توجد محتويات مدفوعة مرفوعة حالياً."
             await query.edit_message_text(text, reply_markup=back_to_home_keyboard(admin_status), parse_mode="HTML")
             return
 
@@ -461,7 +546,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="home" if not admin_status else "switch_to_user_view")])
         
         await query.edit_message_text(
-            f"📂 **{title}**\n\n👇 اختر المحتوى الذي ترغب في استعراضه:",
+            "💎 **القسم المدفوع المميز (VIP)**\n\n👇 اختر المحتوى الحصري الذي ترغب في استعراضه:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
@@ -580,7 +665,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action, target_id_str = data.split("_")
         target_id = int(target_id_str)
         
-        # 🛡️ حماية مالك البوت من الحظر عبر الأزرار
         if is_owner(target_id):
             await query.answer("❌ تنبيه أمني: لا يمكنك حظر مالك البوت الأساسي أبداً!", show_alert=True)
             return
@@ -625,7 +709,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         return
 
-# ==================== معالجة رسائل ورفع ملفات المسؤول ====================
+# ==================== معالجة رسائل ورفع ملفات / قنوات المسؤول ====================
 
 async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -641,6 +725,56 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
     if message.text and message.text == "/cancel":
         ADMIN_STATES.pop(user.id, None)
         await message.reply_text("❌ تم الإلغاء بنجاح.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ لوحة التحكم", callback_data="admin_panel")]]))
+        return
+
+    # خطوة إضافة قناة اشتراك إجباري جديدة (اليوزر)
+    if user_state.get("step") == "waiting_channel_username" and message.text:
+        ch_username = message.text.strip()
+        ADMIN_STATES[user.id]["channel_username"] = ch_username
+        ADMIN_STATES[user.id]["step"] = "waiting_channel_link"
+        
+        await message.reply_text(
+            f"🔗 **رابط القناة:**\n\n"
+            f"تم حفظ معرف القناة: `{ch_username}`\n"
+            f"الآن أرسل **رابط الدعوة الخاص بالقناة** (مثلاً: `https://t.me/wassab_1`):",
+            parse_mode="Markdown"
+        )
+        return
+
+    # الخطوة الثانية: حفظ رابط القناة في قاعدة البيانات
+    if user_state.get("step") == "waiting_channel_link" and message.text:
+        ch_link = message.text.strip()
+        ch_username = ADMIN_STATES[user.id].get("channel_username")
+
+        conn = sqlite3.connect("wassab_store.db")
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO forced_channels (channel_username, channel_link) VALUES (?, ?)",
+                (ch_username, ch_link)
+            )
+            conn.commit()
+            success = True
+        except sqlite3.IntegrityError:
+            success = False
+        conn.close()
+
+        ADMIN_STATES.pop(user.id, None)
+
+        success_kb = InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ إدارة القنوات", callback_data="admin_manage_channels")]])
+        if success:
+            await message.reply_text(
+                f"✅ **تمت إضافة القناة بنجاح إلى نظام الاشتراك الإجباري!**\n\n"
+                f"📢 **القناة:** `{ch_username}`\n"
+                f"🔗 **الرابط:** {ch_link}",
+                reply_markup=success_kb,
+                parse_mode="Markdown"
+            )
+        else:
+            await message.reply_text(
+                "❌ عذراً، هذه القناة مضافة مسبقاً في القائمة!",
+                reply_markup=success_kb
+            )
         return
 
     if user_state.get("action") == "broadcast":
@@ -683,9 +817,9 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
         ADMIN_STATES[user.id]["step"] = "waiting_file"
         
         await message.reply_text(
-            f"📥 **إرسال الملف**\n\n"
+            f"📥 **إرسال الملف المطلوب**\n\n"
             f"تم اعتماد القسم الفرعي: **{subcat}**\n"
-            f"الآن أرسل مستند الكتاب في الشات مباشرة."
+            f"الآن أرسل الملف (كتاب، صورة، أو فيديو) في الشات مباشرة."
         )
         return
 
@@ -708,7 +842,7 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
 
         await message.reply_text(
             "✍️ **خطوة أخيرة: عنوان الملف**\n\n"
-            "اكتب الآن **عنوان الكتاب أو المنتج** وأرسله في رسالة نصية لحفظه نهائياً."
+            "اكتب الآن **عنوان المنتج أو الملف** وأرسله في رسالة نصية لحفظه نهائياً."
         )
         return
 
@@ -756,7 +890,6 @@ application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_ad
 
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_listener():
-    """استقبال التحديثات من تيليجرام وتمريرها للبوت عبر الطابور غير المتزامن"""
     json_data = request.get_json(force=True)
     update = Update.de_json(json_data, application.bot)
     
