@@ -681,7 +681,7 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="Markdown"
         )
         return
-
+        
 import os
 from flask import Flask, request
 from telegram import Update
@@ -711,11 +711,11 @@ def webhook_listener():
 def home():
     return "Wassab Store Bot is running live via Webhook! 🚀", 200
 
-# (تمت إزالة set_webhook من هنا لأنه تم ربطه مسبقاً وتيليجرام يحفظه تلقائياً)
-
+# تهيئة البوت ليبدأ العمل في الخلفية لمعالجة الطابور
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host="0.0.0.0", port=port)
-if __name__ == "__main__":
+    # تشغيل تطبيق البوت (initialize & start) لكي يصبح جاهزاً لمعالجة التحديثات القادمة من الويب هوك
+    application.initialize()
+    application.start()
+    
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port)
