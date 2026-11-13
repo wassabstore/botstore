@@ -1,3 +1,4 @@
+
 import os
 import sqlite3
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -686,6 +687,7 @@ import os
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+import asyncio
 
 flask_app = Flask(__name__)
 
@@ -702,21 +704,22 @@ application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_ad
 
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_listener():
+    """معالجة التحديث القادم من تيليجرام وتمريره للبوت فوراً"""
     json_data = request.get_json(force=True)
     update = Update.de_json(json_data, application.bot)
-    application.update_queue.put_nowait(update)
+    
+    # تشغيل عملية معالجة التحديث بشكل مباشر عبر البوت
+    async def process():
+        await application.initialize()
+        await application.process_update(update)
+    
+    asyncio.run(process())
     return "OK", 200
 
 @flask_app.route("/")
 def home():
     return "Wassab Store Bot is running live via Webhook! 🚀", 200
 
-# تهيئة البوت ليبدأ العمل في الخلفية لمعالجة الطابور
 if __name__ == "__main__":
-    # تشغيل تطبيق البوت لمعالجة الطابور
-    application.initialize()
-    application.start()
-    
-    # تشغيل سيرفر Flask مع تفعيل الـ threaded ليبقى مستمراً في استقبال الطلبات
     port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host="0.0.0.0", port=port, threaded=True)
+    flask_app.run(host="0.0.0.0", port=port)
