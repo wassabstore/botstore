@@ -695,7 +695,7 @@ WEBHOOK_URL = f"https://botstore-54tw.onrender.com/{TOKEN}"
 # بناء تطبيق البوت
 application = ApplicationBuilder().token(TOKEN).build()
 
-# إضافة الهاندلرز الخاصة بك هنا (تأكد أن الهاندلرز معرفة مسبقاً في ملفك)
+# إضافة الهاندلرز الخاصة بك
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_admin_messages))
@@ -711,9 +711,11 @@ def webhook_listener():
 def home():
     return "Wassab Store Bot is running live via Webhook! 🚀", 200
 
-# تعيين الويب هوك بشكل مباشر وبدون أخطاء
-application.bot.set_webhook(url=WEBHOOK_URL)
+# (تمت إزالة set_webhook من هنا لأنه تم ربطه مسبقاً وتيليجرام يحفظه تلقائياً)
 
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    flask_app.run(host="0.0.0.0", port=port)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port)
