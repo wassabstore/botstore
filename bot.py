@@ -42,8 +42,7 @@ def init_db():
             dl_paid INTEGER DEFAULT 0
         )
     """)
-
-
+    
     # جدول المنتجات (مع حقل القسم الفرعي للكتب)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS products (
@@ -199,7 +198,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_admin:
         welcome_text = (
-            f"👑 **أهلاً بك يا مدير المتجر المحترم  ({user.full_name})!**\n\n"
+            f"👑 **أهلاً بك يا مالك المتجر العظيم ({user.full_name})!**\n\n"
             "⚙️ تم فتح **لوحة التحكم السيادية** الخاصة بك بنجاح."
         )
         reply_markup = admin_menu_keyboard()
@@ -264,7 +263,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         ADMIN_STATES.pop(user_id, None)
         await query.edit_message_text(
-            "⚙️ **لوحة تحكم المسؤول الخارقة:**\nمرحباً بك يا مدير المتجر. اختر الإجراء المطلوب:",
+            "⚙️ **لوحة تحكم المسؤول الخارقة:**\nمرحباً بك يا قائد المتجر. اختر الإجراء المطلوب:",
             reply_markup=admin_menu_keyboard(),
             parse_mode="HTML"
         )
@@ -684,17 +683,47 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-# ==================== تشغيل التطبيق ====================
+import os
+from flask import Flask, request
+from telegram import Update
+
+# إعداد تطبيق Flask لاستقبال الـ Webhook
+flask_app = Flask(__name__)
+
+# ضع رابط موقعك على Render هنا (يجب أن ينتهي بتوكن البوت الخاص بك)
+# استبدل "YOUR_BOT_TOKEN" بالتوكن الفعلي أو المتغير المعرف لديك
+TOKEN = "YOUR_BOT_TOKEN" 
+WEBHOOK_URL = f"https://botstore.onrender.com/{TOKEN}"
+
+@flask_app.route(f"/{TOKEN}", methods=["POST"])
+def webhook_listener():
+    """هذه الدالة تستقبل التحديثات فوراً من تيليجرام وتحولها للبوت"""
+    json_data = request.get_json(force=True)
+    update = Update.de_json(json_data, app.bot)
+    app.update_queue.put_nowait(update)
+    return "OK", 200
+
+@flask_app.route("/")
+def home():
+    return "Wassab Store Bot is running live via Webhook! 🚀", 200
 
 def main():
+    global app
+    # بناء البوت بالطريقة المعتادة
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # إضافة الهاندلرز (الأوامر والأزرار) كما هي لديك
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_admin_messages))
 
-    print("🚀 بوت Wassab Store يعمل بأقصى سرعة وكفاءة فائقة...")
-    app.run_polling()
+    # تعيين الـ Webhook تلقائياً مع خوادم تيليجرام
+    app.bot.set_webhook(url=WEBHOOK_URL)
+    
+    print("🚀 تم تفعيل نظام الويب هوك بنجاح!")
 
 if __name__ == "__main__":
     main()
+    # تشغيل سيرفر Flask على البورت المخصص من Render
+    port = int(os.environ.get("PORT", 10000))
+    flask_app.run(host="0.0.0.0", port=port)
