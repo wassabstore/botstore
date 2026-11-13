@@ -692,7 +692,7 @@ flask_app = Flask(__name__)
 
 # ضع رابط موقعك على Render هنا (يجب أن ينتهي بتوكن البوت الخاص بك)
 # استبدل "YOUR_BOT_TOKEN" بالتوكن الفعلي أو المتغير المعرف لديك
-TOKEN = "YOUR_BOT_TOKEN" 
+TOKEN = "9157079266:AAHnLCeWZCFsdR5YCRLs9clVghaYzqYDpTE" 
 WEBHOOK_URL = f"https://botstore-54tw.onrender.com/{TOKEN}"
 
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
