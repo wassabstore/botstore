@@ -1,6 +1,6 @@
-
 import os
 import sqlite3
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,14 +10,22 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+import asyncio
 
 # ==================== الإعدادات الرئيسية ====================
 TOKEN = "9157079266:AAHnLCeWZCFsdR5YCRLs9clVghaYzqYDpTE"
-ADMIN_ID = 8233150959  # الآيدي الخاص بك (wassab store)
+OWNER_ID = 8233150959  # معرف مالك البوت الأساسي المحمى (Wassab Store)
+ADMIN_ID = OWNER_ID
 
 # إعدادات قناة الاشتراك الإجباري
 CHANNEL_USERNAME = "@wassab_1" 
 LINK_CHANNEL = "https://t.me/wassab_1"
+
+# رابط الويب هوك الخاص بـ Render
+WEBHOOK_URL = f"https://botstore-54tw.onrender.com/{TOKEN}"
+
+# إعداد تطبيق الـ Flask
+flask_app = Flask(__name__)
 
 # متغيرات لحفظ حالة المالك (الإذاعة أو خطوات رفع الملفات)
 ADMIN_STATES = {}
@@ -59,6 +67,10 @@ def init_db():
     conn.close()
 
 init_db()
+
+def is_owner(user_id: int) -> bool:
+    """دالة للتحقق مما إذا كان المستخدم هو مالك البوت الأساسي"""
+    return user_id == OWNER_ID
 
 def add_user(user_id, full_name, username):
     conn = sqlite3.connect("wassab_store.db")
@@ -103,7 +115,7 @@ def check_vip(user_id):
 
 # ==================== دالة التحقق من الاشتراك الإجباري ====================
 async def check_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
-    if user_id == ADMIN_ID:
+    if is_owner(user_id):
         return True
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
@@ -181,7 +193,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     is_new = add_user(user.id, user.full_name, user.username or "لا يوجد")
-    if is_new and user.id != ADMIN_ID:
+    if is_new and not is_owner(user.id):
         alert_text = (
             f"🔔 **مستخدم جديد انضم إلى المتجر!**\n\n"
             f"👤 **الاسم:** {user.full_name}\n"
@@ -189,14 +201,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🆔 **الآيدي (ID):** `{user.id}`"
         )
         try:
-            await context.bot.send_message(chat_id=ADMIN_ID, text=alert_text, parse_mode="Markdown")
+            await context.bot.send_message(chat_id=OWNER_ID, text=alert_text, parse_mode="Markdown")
         except Exception as e:
             print(f"خطأ في إرسال التنبيه للمالك: {e}")
 
-    is_admin = (user.id == ADMIN_ID)
+    admin_status = is_owner(user.id)
     is_vip = check_vip(user.id)
 
-    if is_admin:
+    if admin_status:
         welcome_text = (
             f"👑 **أهلاً بك يا مالك المتجر العظيم ({user.full_name})!**\n\n"
             "⚙️ تم فتح **لوحة التحكم السيادية** الخاصة بك بنجاح."
@@ -217,9 +229,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode="HTML")
 
+async def admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """أمر سريع للوصول للوحة التحكم عبر /admin"""
+    user = update.effective_user
+    if not is_owner(user.id):
+        await update.message.reply_text("⛔ عذراً، هذا الأمر مخصص لمالك المتجر فقط!")
+        return
+    await update.message.reply_text(
+        "⚙️ **لوحة تحكم المسؤول الخارقة:**\nمرحباً بك يا قائد المتجر. اختر الإجراء المطلوب:",
+        reply_markup=admin_menu_keyboard(),
+        parse_mode="HTML"
+    )
+
+async def ban_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """أمر لحظر المستخدمين مع حماية تامة لمالك البوت"""
+    user = update.effective_user
+    if not is_owner(user.id):
+        await update.message.reply_text("⛔ هذا الأمر للمشرفين فقط.")
+        return
+
+    try:
+        target_user_id = int(context.args[0])
+    except (IndexError, ValueError):
+        await update.message.reply_text("⚠️ يرجى تحديد معرف المستخدم (ID) المراد حظره بشكل صحيح.\nمثال: `/ban 123456789`", parse_mode="Markdown")
+        return
+
+    # 🛡️ حماية مالك البوت من الحظر
+    if is_owner(target_user_id):
+        await update.message.reply_text("❌ تنبيه أمني: لا يمكنك حظر مالك البوت الأساسي (Wassab Store) أبداً!")
+        return
+
+    conn = sqlite3.connect("wassab_store.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (target_user_id,))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(f"✅ تم حظر المستخدم ذو المعرف `{target_user_id}` بنجاح.", parse_mode="Markdown")
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user = query.from_user  # تم تعريف user لتجنب خطأ NameError
+    user = query.from_user
     user_id = user.id
     
     if check_banned(user_id):
@@ -240,12 +290,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("🌟 أنت تمتلك حساباً مميزاً (VIP) يمنحك صلاحيات خاصة في المتجر!", show_alert=True)
         return
 
-    is_admin = (user_id == ADMIN_ID)
+    admin_status = is_owner(user_id)
 
     if data == "home" or data == "switch_to_user_view":
         await query.answer()
         is_vip = check_vip(user_id)
-        if is_admin and data == "switch_to_user_view":
+        if admin_status and data == "switch_to_user_view":
             text = "🛒 **عرض واجهة المتجر كما يراها المستخدمون:**"
             keyboard = user_menu_keyboard(is_vip)
             keyboard.inline_keyboard.append([InlineKeyboardButton("⚙️ العودة لوحة تحكم المالك", callback_data="admin_panel")])
@@ -257,7 +307,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data == "admin_panel":
-        if not is_admin:
+        if not admin_status:
             await query.answer("❌ لست مخولاً بالدخول إلى هذه اللوحة!", show_alert=True)
             return
         await query.answer()
@@ -270,7 +320,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     elif data == "admin_broadcast_start":
-        if not is_admin: return
+        if not admin_status: return
         await query.answer()
         ADMIN_STATES[user_id] = {"action": "broadcast"}
         
@@ -279,11 +329,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "الآن، قم بإرسال الرسالة التي تريد إرسالها لجميع المشتركين (نص، صورة، فيديو، إلخ).\n\n"
             "⚠️ للإلغاء في أي وقت، أرسل الكلمة: `/cancel`"
         )
-        await query.edit_message_text(guide_text, reply_markup=back_to_home_keyboard(is_admin), parse_mode="Markdown")
+        await query.edit_message_text(guide_text, reply_markup=back_to_home_keyboard(admin_status), parse_mode="Markdown")
         return
 
     elif data == "admin_start_upload":
-        if not is_admin: return
+        if not admin_status: return
         await query.answer()
         ADMIN_STATES[user_id] = {"step": "waiting_category"}
         
@@ -301,7 +351,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data.startswith("set_cat_"):
-        if not is_admin: return
+        if not admin_status: return
         _, _, chosen_cat = data.split("_")
         if user_id in ADMIN_STATES:
             ADMIN_STATES[user_id]["category"] = chosen_cat
@@ -322,7 +372,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data.startswith("set_type_"):
-        if not is_admin: return
+        if not admin_status: return
         _, _, chosen_type = data.split("_")
         if user_id in ADMIN_STATES and "category" in ADMIN_STATES[user_id]:
             ADMIN_STATES[user_id]["file_type"] = chosen_type
@@ -333,7 +383,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(
                     "📚 **خطوة 3: قسم الكتب الفرعي**\n\n"
                     "اكتب اسم القسم الخاص بهذا الكتاب (مثلاً: `برمجة`, `روايات`) وأرسله في رسالة نصية.",
-                    reply_markup=back_to_home_keyboard(is_admin),
+                    reply_markup=back_to_home_keyboard(admin_status),
                     parse_mode="Markdown"
                 )
             else:
@@ -344,7 +394,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "📥 **خطوة 3: إرسال الملف**\n\n"
                     "أرسل الآن الملف المطلوب في الشات مباشرة.\n\n"
                     "⚠️ للإلغاء أرسل `/cancel`",
-                    reply_markup=back_to_home_keyboard(is_admin),
+                    reply_markup=back_to_home_keyboard(admin_status),
                     parse_mode="Markdown"
                 )
         return
@@ -358,11 +408,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
         if not sub_cats:
-            await query.edit_message_text("📚 **قسم الكتب والمؤلفات**\n\n⚠️ عذراً، لا توجد كتب مرفوعة حالياً.", reply_markup=back_to_home_keyboard(is_admin))
+            await query.edit_message_text("📚 **قسم الكتب والمؤلفات**\n\n⚠️ عذراً، لا توجد كتب مرفوعة حالياً.", reply_markup=back_to_home_keyboard(admin_status))
             return
 
         keyboard = [[InlineKeyboardButton(f"📁 قسم: {scat}", callback_data=f"book_subcat_{scat}")] for (scat,) in sub_cats]
-        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="home" if not is_admin else "switch_to_user_view")])
+        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="home" if not admin_status else "switch_to_user_view")])
 
         await query.edit_message_text("📚 **قسم الكتب والمؤلفات**\n\n👇 اختر القسم المناسب:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         return
@@ -404,11 +454,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not products:
             text = f"📂 **{title}**\n\n⚠️ عذراً، لا توجد محتويات مرفوعة في هذا القسم حالياً."
-            await query.edit_message_text(text, reply_markup=back_to_home_keyboard(is_admin), parse_mode="HTML")
+            await query.edit_message_text(text, reply_markup=back_to_home_keyboard(admin_status), parse_mode="HTML")
             return
 
         keyboard = [[InlineKeyboardButton(f"📥 {p_title}", callback_data=f"get_item_{p_id}")] for p_id, p_title, _ in products]
-        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="home" if not is_admin else "switch_to_user_view")])
+        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="home" if not admin_status else "switch_to_user_view")])
         
         await query.edit_message_text(
             f"📂 **{title}**\n\n👇 اختر المحتوى الذي ترغب في استعراضه:",
@@ -432,7 +482,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title, f_type, file_id, category = item
         is_vip = check_vip(user_id)
         
-        if category == "paid" and not is_admin and not is_vip:
+        if category == "paid" and not admin_status and not is_vip:
             await query.answer("💎 هذا المحتوى خاص بأعضاء VIP فقط!", show_alert=True)
             return
 
@@ -448,7 +498,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data == "admin_manage_products":
-        if not is_admin: return
+        if not admin_status: return
         await query.answer()
         
         conn = sqlite3.connect("wassab_store.db")
@@ -458,7 +508,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
         if not products:
-            await query.edit_message_text("📦 لا توجد منتجات مرفوعة حالياً.", reply_markup=back_to_home_keyboard(is_admin))
+            await query.edit_message_text("📦 لا توجد منتجات مرفوعة حالياً.", reply_markup=back_to_home_keyboard(admin_status))
             return
 
         keyboard = [[InlineKeyboardButton(f"🗑️ حذف: {p_title[:15]}", callback_data=f"del_prod_{p_id}")] for p_id, p_title in products]
@@ -468,7 +518,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data.startswith("del_prod_"):
-        if not is_admin: return
+        if not admin_status: return
         p_id = data.split("_")[2]
         conn = sqlite3.connect("wassab_store.db")
         cursor = conn.cursor()
@@ -486,7 +536,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data == "admin_users":
-        if not is_admin: return
+        if not admin_status: return
         await query.answer()
         
         conn = sqlite3.connect("wassab_store.db")
@@ -526,9 +576,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data.startswith("ban_") or data.startswith("unban_"):
-        if not is_admin: return
-        action, target_id = data.split("_")
-        target_id = int(target_id)
+        if not admin_status: return
+        action, target_id_str = data.split("_")
+        target_id = int(target_id_str)
+        
+        # 🛡️ حماية مالك البوت من الحظر عبر الأزرار
+        if is_owner(target_id):
+            await query.answer("❌ تنبيه أمني: لا يمكنك حظر مالك البوت الأساسي أبداً!", show_alert=True)
+            return
+
         new_status = 1 if action == "ban" else 0
         
         conn = sqlite3.connect("wassab_store.db")
@@ -541,7 +597,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data.startswith("vip_") or data.startswith("unvip_"):
-        if not is_admin: return
+        if not admin_status: return
         action, target_id = data.split("_")
         target_id = int(target_id)
         new_vip_status = 1 if action == "vip" else 0
@@ -573,10 +629,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user.id != ADMIN_ID:
+    if not is_owner(user.id):
         return
 
     message = update.message
+    if not message:
+        return
+
     user_state = ADMIN_STATES.get(user.id, {})
 
     if message.text and message.text == "/cancel":
@@ -598,7 +657,7 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
         fail_count = 0
 
         for (u_id,) in all_users:
-            if u_id == ADMIN_ID:
+            if is_owner(u_id):
                 continue
             try:
                 await context.bot.copy_message(
@@ -683,32 +742,24 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-import os
-from flask import Flask, request
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
-import asyncio
+# ==================== بناء تطبيق البوت وتسجيل الهاندلرز ====================
 
-flask_app = Flask(__name__)
-
-TOKEN = "9157079266:AAHnLCeWZCFsdR5YCRLs9clVghaYzqYDpTE"
-WEBHOOK_URL = f"https://botstore-54tw.onrender.com/{TOKEN}"
-
-# بناء تطبيق البوت
 application = ApplicationBuilder().token(TOKEN).build()
 
-# إضافة الهاندلرز الخاصة بك
 application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("admin", admin_panel_cmd))
+application.add_handler(CommandHandler("ban", ban_user_cmd))
 application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_admin_messages))
 
+# ==================== مسارات الـ Webhook والـ Flask ====================
+
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_listener():
-    """معالجة التحديث القادم من تيليجرام وتمريره للبوت فوراً"""
+    """استقبال التحديثات من تيليجرام وتمريرها للبوت عبر الطابور غير المتزامن"""
     json_data = request.get_json(force=True)
     update = Update.de_json(json_data, application.bot)
     
-    # تشغيل عملية معالجة التحديث بشكل مباشر عبر البوت
     async def process():
         await application.initialize()
         await application.process_update(update)
