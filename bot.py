@@ -681,7 +681,7 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="Markdown"
         )
         return
-        
+
 import os
 from flask import Flask, request
 from telegram import Update
@@ -713,9 +713,10 @@ def home():
 
 # تهيئة البوت ليبدأ العمل في الخلفية لمعالجة الطابور
 if __name__ == "__main__":
-    # تشغيل تطبيق البوت (initialize & start) لكي يصبح جاهزاً لمعالجة التحديثات القادمة من الويب هوك
+    # تشغيل تطبيق البوت لمعالجة الطابور
     application.initialize()
     application.start()
     
+    # تشغيل سيرفر Flask مع تفعيل الـ threaded ليبقى مستمراً في استقبال الطلبات
     port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host="0.0.0.0", port=port)
+    flask_app.run(host="0.0.0.0", port=port, threaded=True)
