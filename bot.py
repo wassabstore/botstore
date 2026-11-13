@@ -692,11 +692,13 @@ flask_app = Flask(__name__)
 TOKEN = "9157079266:AAHnLCeWZCFsdR5YCRLs9clVghaYzqYDpTE"
 WEBHOOK_URL = f"https://botstore-54tw.onrender.com/{TOKEN}"
 
-# بناء تطبيق البوت وتجهيزه فوراً عند تشغيل الملف
+# بناء تطبيق البوت
 application = ApplicationBuilder().token(TOKEN).build()
 
-# إضافة الهاندلرز الخاصة بك هنا مباشرة
-# application.add_handler(...)
+# إضافة الهاندلرز الخاصة بك هنا (تأكد أن الهاندلرز معرفة مسبقاً في ملفك)
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CallbackQueryHandler(button_handler))
+application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_admin_messages))
 
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_listener():
@@ -709,9 +711,8 @@ def webhook_listener():
 def home():
     return "Wassab Store Bot is running live via Webhook! 🚀", 200
 
-# تعيين الويب هوك مرة واحدة عند بدء تشغيل السيرفر
-with application:
-    application.bot.set_webhook(url=WEBHOOK_URL)
+# تعيين الويب هوك بشكل مباشر وبدون أخطاء
+application.bot.set_webhook(url=WEBHOOK_URL)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
