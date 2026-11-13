@@ -42,7 +42,8 @@ def init_db():
             dl_paid INTEGER DEFAULT 0
         )
     """)
-    
+
+
     # جدول المنتجات (مع حقل القسم الفرعي للكتب)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS products (
