@@ -198,7 +198,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_admin:
         welcome_text = (
-            f"👑 **أهلاً بك يا مالك المتجر العظيم ({user.full_name})!**\n\n"
+            f"👑 **أهلاً بك يا مدير المتجر المحترم  ({user.full_name})!**\n\n"
             "⚙️ تم فتح **لوحة التحكم السيادية** الخاصة بك بنجاح."
         )
         reply_markup = admin_menu_keyboard()
@@ -263,7 +263,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         ADMIN_STATES.pop(user_id, None)
         await query.edit_message_text(
-            "⚙️ **لوحة تحكم المسؤول الخارقة:**\nمرحباً بك يا قائد المتجر. اختر الإجراء المطلوب:",
+            "⚙️ **لوحة تحكم المسؤول الخارقة:**\nمرحباً بك يا مدير المتجر. اختر الإجراء المطلوب:",
             reply_markup=admin_menu_keyboard(),
             parse_mode="HTML"
         )
