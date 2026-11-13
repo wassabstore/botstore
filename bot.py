@@ -685,18 +685,21 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
 import os
 from flask import Flask, request
 from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
 flask_app = Flask(__name__)
 
 TOKEN = "9157079266:AAHnLCeWZCFsdR5YCRLs9clVghaYzqYDpTE"
 WEBHOOK_URL = f"https://botstore-54tw.onrender.com/{TOKEN}"
 
-# متغير عام لتخزين كائن البوت
-application = None
+# بناء تطبيق البوت وتجهيزه فوراً عند تشغيل الملف
+application = ApplicationBuilder().token(TOKEN).build()
+
+# إضافة الهاندلرز الخاصة بك هنا مباشرة
+# application.add_handler(...)
 
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_listener():
-    """دالة استقبال التحديثات من تيليجرام ومعالجتها بأمان"""
     json_data = request.get_json(force=True)
     update = Update.de_json(json_data, application.bot)
     application.update_queue.put_nowait(update)
@@ -706,21 +709,10 @@ def webhook_listener():
 def home():
     return "Wassab Store Bot is running live via Webhook! 🚀", 200
 
-def main():
-    global application
-    # بناء البوت وتخزينه في المتغير العام
-    application = ApplicationBuilder().token(TOKEN).build()
-
-    # إضافة الهاندلرز الخاصة بك
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_admin_messages))
-
-    # تشغيل الدالة لتعيين الويب هوك
+# تعيين الويب هوك مرة واحدة عند بدء تشغيل السيرفر
+with application:
     application.bot.set_webhook(url=WEBHOOK_URL)
-    print("🚀 تم تفعيل نظام الويب هوك بنجاح!")
 
 if __name__ == "__main__":
-    main()
     port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host="0.10.0.0", port=port)
+    flask_app.run(host="0.0.0.0", port=port)
