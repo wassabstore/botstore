@@ -991,15 +991,13 @@ def webhook_listener():
         json_data = request.get_json(force=True)
         update = Update.de_json(json_data, application.bot)
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        async def process():
+        # استخدام طريقة آمنة تماماً لتنفيذ التحديث بدون تعارض مع الـ Event Loop المغلق
+        async def process_update_safely():
             await application.initialize()
             await application.process_update(update)
-            
-        loop.run_until_complete(process())
-        loop.close()
+
+        # تشغيل العملية في حلقة جديدة بالكامل باستخدام asyncio.run()
+        asyncio.run(process_update_safely())
         
     except Exception as e:
         print(f"خطأ في الويب هوك: {e}")
