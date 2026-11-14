@@ -12,6 +12,7 @@ from telegram.ext import (
     filters,
 )
 import asyncio
+from datetime import datetime, timedelta
 
 # ==================== الإعدادات الرئيسية ====================
 TOKEN = "9157079266:AAHnLCeWZCFsdR5YCRLs9clVghaYzqYDpTE"
@@ -84,6 +85,17 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel_username TEXT UNIQUE,
                 channel_link TEXT
+            )
+        """)
+
+        # جدول الأكواد الترويجية (VIP Promo Codes) مع الصلاحية وعدد الاستخدامات
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                code TEXT PRIMARY KEY,
+                max_uses INTEGER DEFAULT 1,
+                uses_count INTEGER DEFAULT 0,
+                expires_at TEXT,
+                created_by INTEGER
             )
         """)
 
@@ -188,11 +200,11 @@ def user_menu_keyboard(is_vip=False):
             InlineKeyboardButton("💎 القسم المدفوع VIP", callback_data="cat_paid")
         ],
         [
-            InlineKeyboardButton("🎁 تجميع النقاط المجانية", callback_data="get_daily_points"),
-            InlineKeyboardButton("🔗 دعوة أصدقاء (أرباح)", callback_data="my_referral_link")
+            InlineKeyboardButton("🎁 تجميع النقاط", callback_data="get_daily_points"),
+            InlineKeyboardButton("🔗 دعوة أصدقاء", callback_data="my_referral_link")
         ],
         [
-            InlineKeyboardButton("⭐ ترقية الحساب إلى VIP", callback_data="upgrade_to_vip"),
+            InlineKeyboardButton("🎟️ إدخال كود VIP ترويجي", callback_data="enter_promo_code"),
             InlineKeyboardButton("📞 الدعم الفني", callback_data="contact_support")
         ]
     ]
@@ -207,15 +219,20 @@ def admin_menu_keyboard():
             InlineKeyboardButton("📦 إدارة وحذف المنتجات", callback_data="admin_manage_products")
         ],
         [
-            InlineKeyboardButton("📢 إدارة قنوات الإجباري", callback_data="admin_manage_channels"),
+            InlineKeyboardButton("📢 قنوات الإجباري", callback_data="admin_manage_channels"),
             InlineKeyboardButton("📢 إذاعة عامة للكل", callback_data="admin_broadcast_start")
         ],
         [
-            InlineKeyboardButton("💾 نسخة احتياطية للقاعدة", callback_data="admin_backup_db"),
+            InlineKeyboardButton("📊 إحصائيات المتجر", callback_data="admin_stats_dashboard"),
+            InlineKeyboardButton("🎟️ توليد كود VIP", callback_data="admin_generate_code")
+        ],
+        [
+            InlineKeyboardButton("📋 الأكواد النشطة", callback_data="admin_list_promo_codes"),
             InlineKeyboardButton("👥 إدارة المستخدمين", callback_data="admin_users")
         ],
         [
-            InlineKeyboardButton("🛒 الانتقال لواجهة المتجر", callback_data="switch_to_user_view")
+            InlineKeyboardButton("💾 نسخة احتياطية", callback_data="admin_backup_db"),
+            InlineKeyboardButton("🛒 واجهة المتجر", callback_data="switch_to_user_view")
         ]
     ])
 
@@ -453,42 +470,119 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(msg_text, reply_markup=keyboard, parse_mode="Markdown")
         return
 
-    elif data == "upgrade_to_vip":
-        VIP_COST = 100
-        if check_vip(user_id):
-            await query.answer("🌟 أنت تمتلك حساب VIP بالفعل ولا تحتاج للترقية!", show_alert=True)
-            return
-
+    elif data == "admin_stats_dashboard":
+        if not admin_status: return
+        await query.answer()
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT points FROM users WHERE user_id = ?", (user_id,))
-            current_points = cursor.fetchone()["points"]
+            cursor.execute("SELECT COUNT(*) AS cnt FROM users")
+            total_users = cursor.fetchone()["cnt"]
+            cursor.execute("SELECT COUNT(*) AS cnt FROM users WHERE is_vip = 1")
+            total_vip = cursor.fetchone()["cnt"]
+            cursor.execute("SELECT COUNT(*) AS cnt FROM users WHERE is_banned = 1")
+            total_banned = cursor.fetchone()["cnt"]
+            cursor.execute("SELECT COUNT(*) AS cnt FROM products")
+            total_products = cursor.fetchone()["cnt"]
+            cursor.execute("SELECT COUNT(*) AS cnt FROM promo_codes WHERE expires_at >= ? AND uses_count < max_uses", (current_date,))
+            active_promo_count = cursor.fetchone()["cnt"]
 
-            if current_points >= VIP_COST:
-                cursor.execute("UPDATE users SET points = points - ?, is_vip = 1 WHERE user_id = ?", (VIP_COST, user_id))
-                conn.commit()
-                success = True
-            else:
-                success = False
-                needed = VIP_COST - current_points
+        stats_text = (
+            f"📊 **لوحة إحصائيات متجر وصاب (Wassab Store):**\n\n"
+            f"👥 **إجمالي المستخدمين:** `{total_users}` مستخدم\n"
+            f"🌟 **أعضاء الـ VIP المميزون:** `{total_vip}` عضو\n"
+            f"🚫 **المستخدمون المحظورون:** `{total_banned}` مستخدم\n"
+            f"📦 **إجمالي المنتجات المرفوعة:** `{total_products}` منتج\n"
+            f"🎟️ **الأكواد الترويجية النشطة:** `{active_promo_count}` كود\n\n"
+            "✨ النظام يعمل بكفاءة عالية على سيرفرات Render."
+        )
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]])
+        await query.edit_message_text(stats_text, reply_markup=keyboard, parse_mode="Markdown")
+        return
 
-        if success:
-            await query.answer("🎉 مبروك! تم خصم النقاط وترقيتك إلى عضو مميز (VIP) بنجاح!", show_alert=True)
-            text = "🔥 **أهلاً بك في عالم الـ VIP يا أخي!**\n\n✨ تم تفعيل حسابك المميز بنجاح."
-            keyboard = user_menu_keyboard(True)
-            keyboard.inline_keyboard.append([InlineKeyboardButton("⚙️ العودة للقائمة", callback_data="home")])
-            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
-        else:
-            await query.answer(f"❌ رصيدك غير كافٍ! رصيدك {current_points} وتحتاج {needed} نقاط إضافية.", show_alert=True)
+    elif data == "admin_generate_code":
+        if not admin_status: return
+        import random
+        import string
+        
+        rand_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        promo_code = f"VIP-{rand_str}"
+        max_uses = 5
+        expires_date = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+        
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO promo_codes (code, max_uses, uses_count, expires_at, created_by) VALUES (?, ?, 0, ?, ?)",
+                (promo_code, max_uses, expires_date, user_id)
+            )
+            conn.commit()
+            
+        await query.answer("✅ تم توليد الكود بنجاح!", show_alert=True)
+        code_msg = (
+            f"🎟️ **تم إنشاء كود VIP ترويجي جديد!**\n\n"
+            f"🔑 الكود: `{promo_code}`\n"
+            f"🔄 مسموح استخدامه: `{max_uses} مرات`\n"
+            f"⏳ ينتهي في تاريخ: `{expires_date}`"
+        )
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]])
+        await query.edit_message_text(code_msg, reply_markup=keyboard, parse_mode="Markdown")
+        return
+
+    elif data == "admin_list_promo_codes":
+        if not admin_status: return
+        await query.answer()
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT code, max_uses, uses_count, expires_at FROM promo_codes WHERE expires_at >= ? AND uses_count < max_uses", (current_date,))
+            active_codes = cursor.fetchall()
+
+        if not active_codes:
+            msg = "📋 **قائمة الأكواد النشطة:**\n\n⚠️ لا توجد أكواد نشطة حالياً."
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]])
+            await query.edit_message_text(msg, reply_markup=keyboard, parse_mode="Markdown")
+            return
+
+        msg = "📋 **قائمة الأكواد الترويجية النشطة حالياً:**\n\n"
+        keyboard = []
+        for c in active_codes:
+            msg += f"🔑 الكود: `{c['code']}` | 📊 الاستخدام: `{c['uses_count']}/{c['max_uses']}` | ⏳ ينتهي: `{c['expires_at']}`\n"
+            keyboard.append([InlineKeyboardButton(f"🗑️ حذف الكود: {c['code']}", callback_data=f"del_promo_{c['code']}")])
+
+        keyboard.append([InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")])
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        return
+
+    elif data.startswith("del_promo_"):
+        if not admin_status: return
+        code_to_delete = data.split("_")[2]
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM promo_codes WHERE code = ?", (code_to_delete,))
+            conn.commit()
+        await query.answer(f"✅ تم حذف الكود بنجاح!", show_alert=True)
+        return await button_handler(update, context)
+
+    elif data == "enter_promo_code":
+        if check_vip(user_id):
+            await query.answer("🌟 أنت تمتلك حساب VIP بالفعل!", show_alert=True)
+            return
+        await query.answer()
+        ADMIN_STATES[user_id] = {"step": "waiting_promo_code"}
+        await query.edit_message_text(
+            "🎟️ **تفعيل اشتراك VIP عبر الكود الترويجي:**\n\nأرسل الكود الذي حصلت عليه الآن:\n\n⚠️ للإلغاء أرسل `/cancel`",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="home")]])
+        )
         return
 
     elif data == "contact_support":
         await query.answer()
         ADMIN_STATES[user_id] = {"step": "waiting_support_message"}
         await query.edit_message_text(
-            "📞 **خدمة الدعم الفني والتواصل:**\n\n"
-            "اكتب رسالتك أو استفسارك الآن في رسالة واحدة وسنقوم بإرسالها مباشرة إلى الإدارة.\n\n"
-            "⚠️ للإلغاء أرسل `/cancel`",
+            "📞 **خدمة الدعم الفني والتواصل:**\n\nاكتب رسالتك أو استفسارك الآن في رسالة واحدة وسنقوم بإرسالها للإدارة.\n\n⚠️ للإلغاء أرسل `/cancel`",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="home")]])
         )
         return
@@ -511,21 +605,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("➕ إضافة قناة جديدة", callback_data="admin_add_channel")])
         keyboard.append([InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")])
 
-        await query.edit_message_text(
-            "📢 **إدارة قنوات الاشتراك الإجباري:**",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
+        await query.edit_message_text("📢 **إدارة قنوات الاشتراك الإجباري:**", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     elif data == "admin_add_channel":
         if not admin_status: return
         await query.answer()
         ADMIN_STATES[user_id] = {"step": "waiting_channel_username"}
-        await query.edit_message_text(
-            "➕ **إضافة قناة اشتراك إجباري جديدة:**\n\nأرسل معرف القناة (مثلاً: `@wassab_1`):\n\n⚠️ للإلغاء أرسل `/cancel`",
-            reply_markup=back_to_home_keyboard(admin_status)
-        )
+        await query.edit_message_text("➕ أرسل معرف القناة (مثلاً: `@wassab_1`):\n\n⚠️ للإلغاء أرسل `/cancel`", reply_markup=back_to_home_keyboard(admin_status))
         return
 
     elif data.startswith("del_ch_"):
@@ -542,11 +629,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not admin_status: return
         await query.answer()
         ADMIN_STATES[user_id] = {"action": "broadcast"}
-        await query.edit_message_text(
-            "📢 **نظام الإذاعة العامة:**\n\nأرسل الرسالة التي تريد إذاعتها للجميع.\n\n⚠️ للإلغاء أرسل `/cancel`",
-            reply_markup=back_to_home_keyboard(admin_status),
-            parse_mode="Markdown"
-        )
+        await query.edit_message_text("📢 **إذاعة عامة:**\n\nأرسل الرسالة التي تريد إذاعتها للجميع.\n\n⚠️ للإلغاء أرسل `/cancel`", reply_markup=back_to_home_keyboard(admin_status), parse_mode="Markdown")
         return
 
     elif data == "admin_start_upload":
@@ -559,7 +642,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("💎 القسم المدفوع (VIP)", callback_data="set_cat_paid")
             ]
         ])
-        await query.edit_message_text("📤 **خطوة 1: اختيار التصنيف الرئيسي**", reply_markup=cat_keyboard)
+        await query.edit_message_text("📤 **اختر التصنيف الرئيسي:**", reply_markup=cat_keyboard)
         return
 
     elif data.startswith("set_cat_"):
@@ -575,7 +658,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ])
             await query.answer()
-            await query.edit_message_text("📂 **خطوة 2: اختيار نوع المحتوى**", reply_markup=type_keyboard)
+            await query.edit_message_text("📂 **اختر نوع المحتوى:**", reply_markup=type_keyboard)
         return
 
     elif data.startswith("set_type_"):
@@ -585,18 +668,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ADMIN_STATES[user_id]["file_type"] = chosen_type
             ADMIN_STATES[user_id]["step"] = "waiting_subcat"
             await query.answer()
-            await query.edit_message_text(
-                "📂 **خطوة 3: تحديد القسم الفرعي**\n\nاكتب اسم القسم (مثلاً: `برمجة`, `شبكات`, `تصميم`):",
-                reply_markup=back_to_home_keyboard(admin_status),
-                parse_mode="Markdown"
-            )
+            await query.edit_message_text("📂 **اكتب اسم القسم الفرعي** (مثلاً: `برمجة`, `تصميم`):", reply_markup=back_to_home_keyboard(admin_status), parse_mode="Markdown")
         return
 
     elif data in ["cat_books", "cat_videos", "cat_photos"]:
         f_type_map = {
-            "cat_books": ("book", "📚 قسم الكتب والمؤلفات"),
-            "cat_videos": ("video", "🎬 قسم الفيديوهات التعليمية"),
-            "cat_photos": ("photo", "🖼️ قسم الصور والتصاميم")
+            "cat_books": ("book", "📚 قسم الكتب"),
+            "cat_videos": ("video", "🎬 قسم الفيديوهات"),
+            "cat_photos": ("photo", "🖼️ قسم الصور")
         }
         f_type, title_text = f_type_map[data]
         await query.answer()
@@ -612,7 +691,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [[InlineKeyboardButton(f"📁 قسم: {scat['sub_category']}", callback_data=f"view_sub_{f_type}_{scat['sub_category']}")] for scat in sub_cats]
         keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="home" if not admin_status else "switch_to_user_view")])
-        await query.edit_message_text(f"{title_text}\n\n👇 اختر القسم الفرعي المناسب:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await query.edit_message_text(f"{title_text}\n\n👇 اختر القسم الفرعي:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         return
 
     elif data.startswith("view_sub_"):
@@ -628,7 +707,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [[InlineKeyboardButton(f"📥 {p['title']}", callback_data=f"get_item_{p['id']}")] for p in products]
         back_cat_target = "cat_books" if f_type == "book" else ("cat_videos" if f_type == "video" else "cat_photos")
-        keyboard.append([InlineKeyboardButton("🔙 رجوع للأقسام", callback_data=back_cat_target)])
+        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data=back_cat_target)])
         await query.edit_message_text(f"📁 **قسم: {scat_name}**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         return
 
@@ -640,7 +719,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             products = cursor.fetchall()
 
         if not products:
-            await query.edit_message_text("💎 **القسم المدفوع (VIP)**\n\n⚠️ لا توجد محتويات مدفوعة حالياً.", reply_markup=back_to_home_keyboard(admin_status))
+            await query.edit_message_text("💎 **القسم المدفوع (VIP)**\n\n⚠️ لا توجد محتويات حالياً.", reply_markup=back_to_home_keyboard(admin_status))
             return
 
         keyboard = [[InlineKeyboardButton(f"📥 {p['title']}", callback_data=f"get_item_{p['id']}")] for p in products]
@@ -686,7 +765,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             products = cursor.fetchall()
 
         if not products:
-            await query.edit_message_text("📦 لا توجد منتجات مرفوعة.", reply_markup=back_to_home_keyboard(admin_status))
+            await query.edit_message_text("📦 لا توجد منتجات.", reply_markup=back_to_home_keyboard(admin_status))
             return
 
         keyboard = [[InlineKeyboardButton(f"🗑️ حذف: {p['title'][:15]}", callback_data=f"del_prod_{p['id']}")] for p in products]
@@ -758,6 +837,40 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
         await message.reply_text("❌ تم الإلغاء بنجاح.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 القائمة", callback_data="home")]]))
         return
 
+    # معالجة إدخال كود الترويج VIP من المستخدم
+    if user_state.get("step") == "waiting_promo_code":
+        entered_code = message.text.strip().upper()
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT code, max_uses, uses_count, expires_at FROM promo_codes WHERE code = ?", (entered_code,))
+            promo = cursor.fetchone()
+            
+            if promo is None:
+                await message.reply_text("❌ هذا الكود غير صحيح! تأكد من كتابته بشكل دقيق.")
+                return
+                
+            if promo["expires_at"] and current_date > promo["expires_at"]:
+                await message.reply_text("⏳ عذراً، هذا الكود **منتهي الصلاحية** ولم يعد سارياً!")
+                return
+                
+            if promo["uses_count"] >= promo["max_uses"]:
+                await message.reply_text("⚠️ عذراً، هذا الكود استنفد **الحد الأقصى لعدد مرات الاستخدام**!")
+                return
+                
+            cursor.execute("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE code = ?", (entered_code,))
+            cursor.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (user.id,))
+            conn.commit()
+
+        ADMIN_STATES.pop(user.id, None)
+        await message.reply_text(
+            "🎉 **مبروك! تم تفعيل اشتراك VIP بنجاح تام عبر الكود الترويجي!**\n\nاستمتع بالمحتويات الحصرية 🌟",
+            reply_markup=user_menu_keyboard(True),
+            parse_mode="Markdown"
+        )
+        return
+
     # معالجة رسالة الدعم الفني الواردة من المستخدم العادي
     if user_state.get("step") == "waiting_support_message":
         if not message.text:
@@ -775,22 +888,18 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             await context.bot.send_message(chat_id=OWNER_ID, text=support_text, parse_mode="Markdown")
             ADMIN_STATES.pop(user.id, None)
-            await message.reply_text(
-                "✅ **تم إرسال رسالتك إلى إدارة المتجر بنجاح!**\nسيتم الرد عليك قريباً.",
-                reply_markup=user_menu_keyboard(check_vip(user.id))
-            )
+            await message.reply_text("✅ تم إرسال رسالتك إلى إدارة المتجر بنجاح!", reply_markup=user_menu_keyboard(check_vip(user.id)))
         except Exception:
-            await message.reply_text("❌ حدث خطأ أثناء إرسال الرسالة للإدارة، حاول مرة أخرى لاحقاً.")
+            await message.reply_text("❌ حدث خطأ أثناء إرسال الرسالة.")
         return
 
     if not is_owner(user.id):
         return
 
-    # إدارة القنوات
     if user_state.get("step") == "waiting_channel_username" and message.text:
         ADMIN_STATES[user.id]["channel_username"] = message.text.strip()
         ADMIN_STATES[user.id]["step"] = "waiting_channel_link"
-        await message.reply_text("🔗 الآن أرسل رابط الدعوة الخاص بالقناة (مثلاً: `https://t.me/...`):", parse_mode="Markdown")
+        await message.reply_text("🔗 الآن أرسل رابط الدعوة الخاص بالقناة:", parse_mode="Markdown")
         return
 
     if user_state.get("step") == "waiting_channel_link" and message.text:
@@ -809,7 +918,6 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
         await message.reply_text("✅ تمت إضافة القناة بنجاح!" if success else "❌ القناة مضافة مسبقاً!", reply_markup=kb)
         return
 
-    # الإذاعة
     if user_state.get("action") == "broadcast":
         ADMIN_STATES.pop(user.id, None)
         await message.reply_text("🚀 جاري إرسال الإذاعة...")
@@ -829,7 +937,6 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
         await message.reply_text(f"✅ تمت الإذاعة بنجاح!\n📤 تم الإرسال إلى: `{success_count}`\n❌ فشل: `{fail_count}`", parse_mode="Markdown")
         return
 
-    # رفع المنتجات
     if user_state.get("step") == "waiting_subcat" and message.text:
         ADMIN_STATES[user.id]["sub_category"] = message.text.strip()
         ADMIN_STATES[user.id]["step"] = "waiting_file"
@@ -844,7 +951,7 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
             )
         )
         if not file_id:
-            await message.reply_text(f"❌ عذراً، يجب إرسال ملف من نوع ({expected_type}) المطابق لاختيارك.")
+            await message.reply_text(f"❌ عذراً، يجب إرسال ملف من نوع ({expected_type}).")
             return
 
         ADMIN_STATES[user.id]["file_id"] = file_id
@@ -884,7 +991,6 @@ def webhook_listener():
         json_data = request.get_json(force=True)
         update = Update.de_json(json_data, application.bot)
         
-        # إنشاء حلقة أحداث جديدة ومستقلة لكل طلب لتجنب أي أخطاء في الـ Event Loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
