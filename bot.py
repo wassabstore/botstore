@@ -320,10 +320,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "home" or data == "switch_to_user_view":
         await query.answer()
         is_vip = check_vip(user_id)
+        
         if admin_status and data == "switch_to_user_view":
             text = "🛒 **عرض واجهة المتجر كما يراها المستخدمون:**"
-            keyboard = user_menu_keyboard(is_vip)
-            keyboard.inline_keyboard.append([InlineKeyboardButton("⚙️ العودة لوحة تحكم المالك", callback_data="admin_panel")])
+            # جلب الأزرار الأساسية للمستخدم وإضافة زر العودة للوحة التحكم في الأسفل
+            markup_items = user_menu_keyboard(is_vip).inline_keyboard.copy()
+            markup_items.append([InlineKeyboardButton("⚙️ العودة لوحة تحكم المالك", callback_data="admin_panel")])
+            keyboard = InlineKeyboardMarkup(markup_items)
         else:
             text = "🏠 **القائمة الرئيسية للمتجر:**\nاختر ما يناسب اهتمامك من الأقسام المتاحة:"
             keyboard = user_menu_keyboard(is_vip)
