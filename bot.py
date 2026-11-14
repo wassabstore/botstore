@@ -985,22 +985,26 @@ application.add_handler(CommandHandler("backup", backup_database_cmd))
 application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_admin_messages))
 
+# إنشاء حلقة أحداث عامة ومستقرة للبوت عند بدء التشغيل
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_listener():
     try:
         json_data = request.get_json(force=True)
         update = Update.de_json(json_data, application.bot)
         
-        # استخدام طريقة آمنة تماماً لتنفيذ التحديث بدون تعارض مع الـ Event Loop المغلق
-        async def process_update_safely():
+        # استخدام الحلقة العامة لتشغيل التحديث بشكل آمن تماماً وبدون إغلاق الحلقة
+        async def process():
             await application.initialize()
             await application.process_update(update)
 
-        # تشغيل العملية في حلقة جديدة بالكامل باستخدام asyncio.run()
-        asyncio.run(process_update_safely())
+        future = asyncio.run_coroutine_threadsafe(process(), loop)
+        future.result() # الانتظار لحين اكتمال المعالجة بنجاح
         
     except Exception as e:
-        print(f"خطأ في الويب هوك: {e}")
+        print(f"خطأ في معالجة الويب هوك: {e}")
         
     return "OK", 200
 
