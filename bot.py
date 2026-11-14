@@ -138,7 +138,6 @@ async def get_unsubscribed_channels(user_id, context: ContextTypes.DEFAULT_TYPE)
                 unsubscribed.append((ch_username, ch_link))
         except Exception as e:
             print(f"خطأ في التحقق من القناة {ch_username}: {e}")
-            # إذا حدث خطأ (مثلاً البوت ليس مشرفاً)، نعتبره غير مشترك لتنبيه المالك أو المستخدم
             unsubscribed.append((ch_username, ch_link))
             
     return unsubscribed
@@ -148,6 +147,10 @@ async def get_unsubscribed_channels(user_id, context: ContextTypes.DEFAULT_TYPE)
 def subscription_keyboard(unsubscribed_channels):
     keyboard = []
     for ch_username, ch_link in unsubscribed_channels:
+        # التأكد من أن الرابط يبدأ بـ http أو https لكي لا يرفضه تيليجرام
+        if not ch_link.startswith("http://") and not ch_link.startswith("https://"):
+            ch_link = f"https://t.me/{ch_username.replace('@', '')}"
+            
         keyboard.append([InlineKeyboardButton(f"📢 اشترك في القناة: {ch_username}", url=ch_link)])
     keyboard.append([InlineKeyboardButton("🔄 تحقق من الاشتراك", callback_data="check_sub")])
     return InlineKeyboardMarkup(keyboard)
