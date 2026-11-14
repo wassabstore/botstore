@@ -24,7 +24,7 @@ WEBHOOK_URL = f"https://botstore-54tw.onrender.com/{TOKEN}"
 # إعداد تطبيق الـ Flask
 flask_app = Flask(__name__)
 
-# متغيرات لحفظ حالة المالك والمستخدمين (الإذاعة، رفع الملفات، القنوات، الدعم)
+# متغيرات لحفظ حالة المالك والمستخدمين
 ADMIN_STATES = {}
 
 # ==================== إدارة قاعدة البيانات وتحسينات الأداء ====================
@@ -48,7 +48,7 @@ def init_db():
         cursor.execute("PRAGMA journal_mode=WAL;")
         cursor.execute("PRAGMA synchronous=NORMAL;")
         
-        # جدول المستخدمين (مع حقول النقاط والإحالات)
+        # جدول المستخدمين
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -87,7 +87,7 @@ def init_db():
             )
         """)
 
-        # 🚀 الفهارس لرفع كفاءة البحث ومنع بطء الاستعلامات مع كثرة المستخدمين
+        # الفهارس لرفع كفاءة البحث
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_invited_by ON users(invited_by);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_type_subcat ON products(file_type, sub_category);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);")
@@ -758,20 +758,29 @@ async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TY
         await message.reply_text("❌ تم الإلغاء بنجاح.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 القائمة", callback_data="home")]]))
         return
 
-    # دعم فني للمستخدم العادي
+    # معالجة رسالة الدعم الفني الواردة من المستخدم العادي
     if user_state.get("step") == "waiting_support_message":
+        if not message.text:
+            await message.reply_text("⚠️ يرجى إرسال رسالتك النصية للإدارة.")
+            return
+
         support_text = (
             f"📩 **رسالة دعم فني جديدة!**\n\n"
             f"👤 **الاسم:** {user.full_name}\n"
+            f"🔗 **اليوزر:** @{user.username if user.username else 'لا يوجد'}\n"
             f"🆔 **الآيدي:** `{user.id}`\n\n"
             f"💬 **النص:**\n{message.text}"
         )
+        
         try:
             await context.bot.send_message(chat_id=OWNER_ID, text=support_text, parse_mode="Markdown")
             ADMIN_STATES.pop(user.id, None)
-            await message.reply_text("✅ تم إرسال رسالتك إلى الإدارة بنجاح!", reply_markup=user_menu_keyboard(check_vip(user.id)))
+            await message.reply_text(
+                "✅ **تم إرسال رسالتك إلى إدارة المتجر بنجاح!**\nسيتم الرد عليك قريباً.",
+                reply_markup=user_menu_keyboard(check_vip(user.id))
+            )
         except Exception:
-            await message.reply_text("❌ فشل إرسال الرسالة.")
+            await message.reply_text("❌ حدث خطأ أثناء إرسال الرسالة للإدارة، حاول مرة أخرى لاحقاً.")
         return
 
     if not is_owner(user.id):
@@ -869,31 +878,26 @@ application.add_handler(CommandHandler("backup", backup_database_cmd))
 application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_admin_messages))
 
-def get_or_create_event_loop():
-    try:
-        return asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop
-
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_listener():
     try:
         json_data = request.get_json(force=True)
         update = Update.de_json(json_data, application.bot)
-        loop = get_or_create_event_loop()
+        
+        # إنشاء حلقة أحداث جديدة ومستقلة لكل طلب لتجنب أي أخطاء في الـ Event Loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
         async def process():
             await application.initialize()
             await application.process_update(update)
             
-        if loop.is_running():
-            asyncio.run_coroutine_threadsafe(process(), loop)
-        else:
-            loop.run_until_complete(process()) if hasattr(loop, 'run_untilComplete') else asyncio.run(process())
+        loop.run_until_complete(process())
+        loop.close()
+        
     except Exception as e:
         print(f"خطأ في الويب هوك: {e}")
+        
     return "OK", 200
 
 @flask_app.route("/")
