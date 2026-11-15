@@ -40,6 +40,7 @@ REFERRAL_POINTS = 15
 MAX_LIST_BUTTONS = 40
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("wassab")
 
 flask_app = Flask(__name__)
@@ -58,6 +59,7 @@ def get_db_connection():
         raise
     finally:
         conn.close()
+
 
 def init_db():
     with get_db_connection() as conn:
@@ -1057,26 +1059,49 @@ application.add_handler(CallbackQueryHandler(button_handler))
 application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
 application.add_error_handler(error_handler)
 
-# ==================== الويب هوك (loop واحد دائم) ====================
+# ==================== الويب هوك (آمن مع fork في gunicorn) ====================
+# يبدأ الـ loop داخل العملية التي تخدم الطلبات فعلياً (العامل)، وليس عند الاستيراد،
+# لأن الـ threads لا تنتقل من العملية الأم إلى العامل بعد fork.
 
-loop = asyncio.new_event_loop()
-threading.Thread(target=loop.run_forever, daemon=True).start()
-
-
-async def _setup():
-    await application.initialize()
-    await application.bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
-    logger.info("تم ضبط الويب هوك: %s", BASE_URL)
+_loop = None
+_loop_pid = None
+_init_lock = threading.Lock()
 
 
-asyncio.run_coroutine_threadsafe(_setup(), loop).result(timeout=60)
+def ensure_started():
+    global _loop, _loop_pid
+    if _loop is not None and _loop_pid == os.getpid():
+        return _loop
+    with _init_lock:
+        if _loop is not None and _loop_pid == os.getpid():
+            return _loop
+        new_loop = asyncio.new_event_loop()
+        threading.Thread(target=new_loop.run_forever, daemon=True).start()
+
+        async def _setup():
+            await application.initialize()
+            await application.bot.set_webhook(WEBHOOK_URL)
+            logger.info("تم ضبط الويب هوك: %s", BASE_URL)
+
+        asyncio.run_coroutine_threadsafe(_setup(), new_loop).result(timeout=60)
+        _loop, _loop_pid = new_loop, os.getpid()
+        return _loop
+
+
+def _log_future(fut):
+    try:
+        fut.result()
+    except Exception:
+        logger.exception("فشل معالجة التحديث")
 
 
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_listener():
     try:
+        lp = ensure_started()
         update = Update.de_json(request.get_json(force=True), application.bot)
-        asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        fut = asyncio.run_coroutine_threadsafe(application.process_update(update), lp)
+        fut.add_done_callback(_log_future)
     except Exception:
         logger.exception("خطأ في الويب هوك")
     return "OK", 200
@@ -1084,6 +1109,10 @@ def webhook_listener():
 
 @flask_app.route("/")
 def home():
+    try:
+        ensure_started()
+    except Exception:
+        logger.exception("فشل التهيئة")
     return "Wassab Store Bot is running live via Webhook! 🚀", 200
 
 
