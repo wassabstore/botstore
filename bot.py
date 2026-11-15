@@ -27,7 +27,7 @@ from telegram.ext import (
 #   BOT_TOKEN  (إجباري)
 #   OWNER_ID   (اختياري)
 #   DB_PATH    (اختياري - ضعه على Disk دائم مثل /data/wassab_store.db)
-TOKEN = os.environ["9157079266:AAHnLCeWZCFsdR5YCRLs9clVghaYzqYDpTE"]
+TOKEN = os.environ["BOT_TOKEN"]
 OWNER_ID = int(os.environ.get("OWNER_ID", "8233150959"))
 DB_PATH = os.environ.get("DB_PATH", "wassab_store.db")
 
