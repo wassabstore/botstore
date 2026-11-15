@@ -59,7 +59,6 @@ def get_db_connection():
     finally:
         conn.close()
 
-
 def init_db():
     with get_db_connection() as conn:
         c = conn.cursor()
